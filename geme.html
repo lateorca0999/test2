@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>レトロ疑似3Dレーサー</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        body {
+            background-color: #0b0f19;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+            touch-action: none;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 480px;
+            height: 100vh;
+            max-height: 700px;
+            background: #111;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.2);
+        }
+
+        /* HUD（スコア・スピードメーター） */
+        .hud {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 16px;
+            font-weight: bold;
+            text-shadow: 2px 2px #000;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .hud-item {
+            background: rgba(0, 0, 0, 0.6);
+            padding: 6px 12px;
+            border-radius: 4px;
+            border: 1px solid #0ff;
+        }
+
+        canvas {
+            flex: 1;
+            width: 100%;
+            background: #000;
+            display: block;
+        }
+
+        /* スマホ用コントロールパネル */
+        .controls {
+            height: 140px;
+            background: #1e293b;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            padding: 10px;
+            border-top: 2px solid #334155;
+        }
+
+        .ctrl-btn {
+            width: 90px;
+            height: 90px;
+            background: #3b82f6;
+            border: 4px solid #60a5fa;
+            border-radius: 50%;
+            color: white;
+            font-size: 28px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 6px 0 #1d4ed8;
+            cursor: pointer;
+            outline: none;
+        }
+
+        .ctrl-btn:active {
+            transform: translateY(4px);
+            box-shadow: 0 2px 0 #1d4ed8;
+            background: #2563eb;
+        }
+
+        .ctrl-btn.boost {
+            background: #ef4444;
+            border-color: #f87171;
+            box-shadow: 0 6px 0 #b91c1c;
+            font-size: 20px;
+        }
+        .ctrl-btn.boost:active {
+            box-shadow: 0 2px 0 #b91c1c;
+            background: #dc2626;
+        }
+
+        /* オーバーレイ画面（スタート / ゲームオーバー） */
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(11, 15, 25, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 20;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .overlay h1 {
+            font-size: 32px;
+            color: #0ff;
+            margin-bottom: 10px;
+            text-shadow: 0 0 10px #0ff;
+        }
+
+        .overlay p {
+            font-size: 14px;
+            color: #94a3b8;
+            margin-bottom: 25px;
+            line-height: 1.6;
+        }
+
+        .start-btn {
+            background: #10b981;
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            font-size: 20px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 4px 0 #047857;
+        }
+        .start-btn:active {
+            transform: translateY(4px);
+            box-shadow: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- HUD -->
+        <div class="hud">
+            <div class="hud-item" id="hud-speed">SPEED: 0 km/h</div>
+            <div class="hud-item" id="hud-time">TIME: 45.0s</div>
+        </div>
+
+        <!-- 画面キャンバス -->
+        <canvas id="gameCanvas" width="480" height="480"></canvas>
+
+        <!-- コントローラー -->
+        <div class="controls">
+            <button class="ctrl-btn" id="btn-left">◀</button>
+            <button class="ctrl-btn boost" id="btn-boost">BOOST</button>
+            <button class="ctrl-btn" id="btn-right">▶</button>
+        </div>
+
+        <!-- スタート/ゲームオーバー画面 -->
+        <div id="overlay" class="overlay">
+            <h1 id="overlay-title">SUPER F-RACER</h1>
+            <p id="overlay-desc">左右ボタンでマシンを操作し、<br>コースアウトしないようにゴールを目指せ！<br>（PCは 矢印キー ＆ SPACE）</p>
+            <button class="start-btn" id="start-btn" onclick="startGame()">エンジン始動</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        // ゲーム状態
+        let gameState = "START"; // START, PLAYING, GAMEOVER, CLEAR
+        let scoreTime = 45.0;
+        let speed = 0;
+        let maxSpeed = 220;
+        let playerX = 0; // -1.0 (左) 〜 1.0 (右)
+        let playerRoadOffset = 0;
+        let cameraY = 0;
+        let trackLength = 15000; // コースの全長
+        let currentPos = 0;
+        
+        // 入力状態
+        const keys = { left: false, right: false, boost: false };
+        let touchLeft = false;
+        let touchRight = false;
+        let touchBoost = false;
+
+        // コースのカーブデータ生成（簡易疑似3D用ライン）
+        const segmentLength = 200;
+        const totalSegments = Math.floor(trackLength / segmentLength);
+        const segments = [];
+
+        for (let i = 0; i < totalSegments; i++) {
+            let curve = 0;
+            // 特定の区間でカーブやうねりを作る
+            if (i > 15 && i < 35) curve = 1.5;
+            if (i > 45 && i < 70) curve = -2.0;
+            if (i > 80 && i < 110) curve = 1.8;
+            
+            segments.push({
+                index: i,
+                p1: { worldZ: i * segmentLength },
+                p2: { worldZ: (i + 1) * segmentLength },
+                curve: curve,
+                color: (Math.floor(i / 3) % 2 === 0) ? { road: "#333", grass: "#0b6623", rumble: "#fff" } : { road: "#444", grass: "#09521c", rumble: "#f00" }
+            });
+        }
+
+        // イベントリスナー（キーボード）
+        window.addEventListener("keydown", (e) => {
+            if (e.key === "ArrowLeft") keys.left = true;
+            if (e.key === "ArrowRight") keys.right = true;
+            if (e.key === " ") keys.boost = true;
+        });
+        window.addEventListener("keyup", (e) => {
+            if (e.key === "ArrowLeft") keys.left = false;
+            if (e.key === "ArrowRight") keys.right = false;
+            if (e.key === " ") keys.boost = false;
+        });
+
+        // スマホタッチイベント
+        const bindTouch = (id, keyName) => {
+            const btn = document.getElementById(id);
+            btn.addEventListener("touchstart", (e) => { e.preventDefault(); keys[keyName] = true; });
+            btn.addEventListener("touchend", (e) => { e.preventDefault(); keys[keyName] = false; });
+            btn.addEventListener("mousedown", (e) => { keys[keyName] = true; });
+            btn.addEventListener("mouseup", (e) => { keys[keyName] = false; });
+        };
+        bindTouch("btn-left", "left");
+        bindTouch("btn-right", "right");
+        bindTouch("btn-boost", "boost");
+
+        function startGame() {
+            gameState = "PLAYING";
+            scoreTime = 45.0;
+            speed = 0;
+            playerX = 0;
+            currentPos = 0;
+            document.getElementById("overlay").style.display = "none";
+        }
+
+        // メインゲームループ
+        let lastTime = performance.now();
+        function gameLoop(time) {
+            const dt = (time - lastTime) / 1000;
+            lastTime = time;
+
+            if (gameState === "PLAYING") {
+                update(dt);
+                render();
+            }
+            requestAnimationFrame(gameLoop);
+        }
+
+        function update(dt) {
+            // 時間減少
+            scoreTime -= dt;
+            if (scoreTime <= 0) {
+                scoreTime = 0;
+                gameOver("タイムアップ！");
+                return;
+            }
+
+            // 加減速とブースト
+            let acceleration = 80;
+            let currentMax = maxSpeed;
+
+            if (keys.boost) {
+                currentMax = 320;
+                acceleration = 160;
+                speed += acceleration * dt;
+            } else {
+                speed += 60 * dt; // 常時自動前進
+            }
+
+            if (speed > currentMax) speed = currentMax;
+            if (speed < 0) speed = 0;
+
+            // 移動距離の加算
+            currentPos += speed * dt;
+
+            // ゴール判定
+            if (currentPos >= trackLength) {
+                gameClear();
+                return;
+            }
+
+            // 現在のセグメントのカーブを取得
+            const currentSegIndex = Math.floor(currentPos / segmentLength) % totalSegments;
+            const currentSeg = segments[currentSegIndex];
+
+            // ステア操作
+            let steer = 2.0 * dt;
+            if (keys.left) {
+                playerX -= steer;
+            }
+            if (keys.right) {
+                playerX += steer;
+            }
+
+            // カーブによる遠心力でマシンが流される
+            playerX -= (currentSeg.curve * speed * dt) / 400;
+
+            // コースアウト判定（画面端を超えたら減速）
+            if (Math.abs(playerX) > 1.2) {
+                speed *= 0.92; // 芝生で減速
+                if (Math.abs(playerX) > 2.2) {
+                    gameOver("コースアウト大破！");
+                    return;
+                }
+            }
+            
+            // プレイヤー位置の制限
+            playerX = Math.max(-2.5, Math.min(2.5, playerX));
+
+            // HUD更新
+            document.getElementById("hud-speed").textContent = `SPEED: ${Math.floor(speed)} km/h`;
+            document.getElementById("hud-time").textContent = `TIME: ${scoreTime.toFixed(1)}s`;
+        }
+
+        function gameOver(reason) {
+            gameState = "GAMEOVER";
+            document.getElementById("overlay-title").textContent = "GAME OVER";
+            document.getElementById("overlay-desc").textContent = reason + `<br>スコア到達度: ${Math.floor((currentPos/trackLength)*100)}%`;
+            document.getElementById("start-btn").textContent = "もう一度挑戦";
+            document.getElementById("overlay").style.display = "flex";
+        }
+
+        function gameClear() {
+            gameState = "CLEAR";
+            document.getElementById("overlay-title").textContent = "GOAL!! 🎉";
+            document.getElementById("overlay-desc").textContent = `お見事完走！ 残りタイム: ${scoreTime.toFixed(1)}秒`;
+            document.getElementById("start-btn").textContent = "再挑戦";
+            document.getElementById("overlay").style.display = "flex";
+        }
+
+        // 描画処理（疑似3Dモード7風）
+        function render() {
+            // 背景（空と地面の色）
+            ctx.fillStyle = "#1b1931";
+            ctx.fillRect(0, 0, canvas.width, canvas.height / 2);
+            ctx.fillStyle = "#0c180c";
+            ctx.fillRect(0, canvas.height / 2, canvas.width, canvas.height / 2);
+
+            // 道路の描画（奥から手前へ台形を重ねる）
+            const baseSegmentIndex = Math.floor(currentPos / segmentLength);
+            const basePercent = (currentPos % segmentLength) / segmentLength;
+
+            let maxDrawDistance = 100;
+            let x = 0;
+            let dx = 0;
+
+            // 奥から手前に向かって描画
+            for (let n = maxDrawDistance; n > 0; n--) {
+                let segIndex = (baseSegmentIndex + n) % totalSegments;
+                let seg = segments[segIndex];
+
+                // 投影計算（パース）
+                let cameraZ = n * segmentLength - (basePercent * segmentLength);
+                if (cameraZ <= 0) continue;
+
+                let scale = 200 / cameraZ;
+                let screenX = canvas.width / 2 + (scale * (x - playerX * 400));
+                let screenY = canvas.height / 2 + scale * 100;
+                let screenW = scale * 800;
+
+                // 次のセグメントの投影
+                let nextSegIndex = (segIndex + 1) % totalSegments;
+                let nextScale = 200 / (cameraZ + segmentLength);
+                let nextScreenY = canvas.height / 2 + nextScale * 100;
+                let nextScreenW = nextScale * 800;
+
+                if (screenY >= nextScreenY) {
+                    // 台形ポリゴンの描画
+                    drawPolygon(
+                        screenX - screenW / 2, screenY,
+                        screenX + screenW / 2, screenY,
+                        canvas.width / 2 + (nextScale * (x + seg.curve * 50 - playerX * 400)) + nextScreenW / 2, nextScreenY,
+                        canvas.width / 2 + (nextScale * (x + seg.curve * 50 - playerX * 400)) - nextScreenW / 2, nextScreenY,
+                        seg.color.road
+                    );
+
+                    // ランブルストリップ（縁石）
+                    drawPolygon(
+                        screenX - screenW / 2 - screenW * 0.1, screenY,
+                        screenX - screenW / 2, screenY,
+                        canvas.width / 2 + (nextScale * (x + seg.curve * 50 - playerX * 400)) - nextScreenW / 2, nextScreenY,
+                        canvas.width / 2 + (nextScale * (x + seg.curve * 50 - playerX * 400)) - nextScreenW / 2 - nextScreenW * 0.1, nextScreenY,
+                        seg.color.rumble
+                    );
+                    drawPolygon(
+                        screenX + screenW / 2, screenY,
+                        screenX + screenW / 2 + screenW * 0.1, screenY,
+                        canvas.width / 2 + (nextScale * (x + seg.curve * 50 - playerX * 400)) + nextScreenW / 2 + nextScreenW * 0.1, nextScreenY,
+                        canvas.width / 2 + (nextScale * (x + seg.curve * 50 - playerX * 400)) + nextScreenW / 2, nextScreenY,
+                        seg.color.rumble
+                    );
+                }
+
+                x += dx;
+                dx += seg.curve;
+            }
+
+            // 自機（プレイヤーマシン）の描画
+            drawPlayerMachine();
+        }
+
+        function drawPolygon(x1, y1, x2, y2, x3, y3, x4, y4, color) {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.lineTo(x3, y3);
+            ctx.lineTo(x4, y4);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        function drawPlayerMachine() {
+            const px = canvas.width / 2;
+            const py = canvas.height - 70;
+
+            // マシンの影
+            ctx.fillStyle = "rgba(0,0,0,0.5)";
+            ctx.beginPath();
+            ctx.ellipse(px, py + 30, 45, 10, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 本体（スーパーファミコン風の立体ドットテイスト）
+            ctx.fillStyle = keys.boost ? "#ff4400" : "#00bcd4";
+            ctx.beginPath();
+            ctx.moveTo(px, py - 25);
+            ctx.lineTo(px - 50, py + 25);
+            ctx.lineTo(px + 50, py + 25);
+            ctx.closePath();
+            ctx.fill();
+
+            // コクピット
+            ctx.fillStyle = "#ffeb3b";
+            ctx.beginPath();
+            ctx.arc(px, py, 12, 0, Math.PI * 2);
+            ctx.fill();
+
+            // ウイング
+            ctx.fillStyle = "#37474f";
+            ctx.fillRect(px - 65, py + 15, 130, 8);
+        }
+
+        // ループ開始
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
